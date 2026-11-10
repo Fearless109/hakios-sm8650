@@ -699,6 +699,9 @@ gdsc_on(void)
 		}
 		return true;
 	}
+	/* Experiment: upstream gdsc_init sets RETAIN long before any power-on; do it here first
+	 * and watch whether the FSM goes further (CFG bits) than without it. */
+	(void)put(&camcc, "titan top GDSC retain", TITAN_TOP_GDSCR, found | GDSC_RETAIN_FF, 0);
 	/* The wait values upstream programs at init (the boot loader leaves 2,2,0xf, so this
 	 * is usually a no-op check); without them the state machine never runs right. */
 	{
@@ -712,6 +715,9 @@ gdsc_on(void)
 			found = get(&camcc, "titan top GDSC", TITAN_TOP_GDSCR);
 		}
 	}
+	/* Experiment: upstream gdsc_init sets RETAIN long before any power-on and this driver
+	 * never did - set it first and watch whether the FSM advances further. */
+	(void)put(&camcc, "titan top GDSC retain", TITAN_TOP_GDSCR, found | GDSC_RETAIN_FF, 0);
 	if (!mxc_parent(true)) {
 		give_up("the titan top power domain's parent (mxc)");
 		return false;
