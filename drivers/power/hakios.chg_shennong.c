@@ -8,7 +8,14 @@
  * device.conf, audio row: no SMP2P, no doorbell after AUTH), so the battery cannot be asked
  * through it. The loader's cache (drivers/power/hakios.battery.c, battery=1) works but only
  * while the UEFI charger drivers answer on core 0. What is always there is the hardware:
- * the PMIC voltage ADC (PMK8550 vadc@9000, slave 0) and the charger core (PM8550B, slave 7).
+ * the PMIC voltage ADC (PMK8550 vadc@9000, slave 0).
+ *
+ * No SPMI charger block (VERDICT 11-10, stock 3.0.308 DTB): the tree has no qpnp/smb
+ * charger node at all; charging lives in qcom,battery-charger over PMIC_GLINK
+ * (PMIC_RTR_ADSP_APPS, charger_pd on the ADSP), with xiaomi,charger_partition
+ * disabled. So chg=1's PPID 0x710 scan finds nothing BY DESIGN, and the driver
+ * stays gauge-only (the scan's fallback message already says so); charger
+ * management waits on the ADSP wall, not on a PPID.
  *
  * What it does.
  *   fg=1    read the battery through the voltage ADC: its voltage (pm8550b_vbat_sns_qbg),
@@ -339,7 +346,9 @@ soc_of(int mv, int full_mv)
 	return curve[i - 1].pct + (curve[i].pct - curve[i - 1].pct) * (mv - curve[i - 1].mv) / (curve[i].mv - curve[i - 1].mv);
 }
 
-/* ---- the charger core (SMB on PM8550B, slave 7, 0x1000 = PPID 0x710) --------------------------------
+/* ---- the charger core (NOT PRESENT on this phone: no SPMI SMB node in the
+ * stock DT, charging is ADSP pmic_glink; the 0x710 scan below is kept as a
+ * probe that proves the absence and falls back to gauge-only) ----------------
  * Upstream Linux drivers/power/supply/qcom_smbx.c (SMB2, same core the SMB5 discussion
  * confirmed at 0x1000 with writes to 0x42/0x61/0x70). Offsets from the charger base. */
 
