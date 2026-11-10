@@ -488,7 +488,13 @@ rpmh_address(const char *name)
 	if (!(db->magic[0] == 0xdb && db->magic[1] == 0x30 && db->magic[2] == 0x03 && db->magic[3] == 0x0c)) {
 		return 0;
 	}
-	strlcpy(id, name, sizeof(id));
+	/* cmd-db ids are 8 raw bytes (an 8-char name has no NUL): copy up to
+	 * 8 chars, strlcpy would cut "mmcx.lvl" to 7. id is zero-filled. */
+	{
+		size_t n = strnlen(name, sizeof(id));
+
+		memcpy(id, name, n);
+	}
 	for (unsigned s = 0; s < 8; s++) {
 		const struct cmd_db_slave *slave = &db->slave[s];
 		const struct cmd_db_entry *entry;
@@ -625,9 +631,8 @@ vrm_vote(const char *resource, uint32_t mv, bool on, bool force)
 
 static struct block camcc = { "camcc", 0x0ade0000, 0x20000 };
 
-/* GCC's camera AHB (DT camcc clocks <&gcc 5> = GCC_CAMERA_AHB_CLK, CBCR 0x26004, a critical
- * clock): gcc-sm8650.c has no branch for it, only a critical-cbcrs entry, so there is no
- * parent to vote (GPLL0, already handled below, is the only PLL ancestor worth a vote);
+/* GCC's camera AHB (DT camcc clocks <&gcc 5> = GCC_CAMERA_AHB_CLK, CBCR 0x26004) is a
+ * critical CBCR in gcc-sm8650 (gcc_sm8650_critical_cbcrs[]: no branch, no PLL parent);
  * an OFF bit that stays set is warn-only, as with the GPU's cfg_ahb on this phone. */
 #define GCC_CAM_AHB_CBCR        0x26004
 /* The 600 MHz GPLL0 is off after a fastboot boot: its taps cannot run until it does (as the
@@ -663,9 +668,35 @@ static struct block gcc = { "gcc", 0x00100000, 0x80000 };
 static bool gdsc_switched, mclk_switched;
 static uint32_t found_mclk_cfg, found_mclk_cbcr, found_mclk_pin;
 
+/* The titan_top GDSC's grandparent (DT cam_cc_titan_top_gdsc parent-supply
+ * pm_v6d_s3_mmcx_voter_level itself hangs off pm_v8_s1_level, resource
+ * "mmcx.lvl", DT init level 0x180; it is also camcc's vdd_mm-supply, and
+ * upstream camcc lists power-domains MMCX+MXC): voted before mxc, without
+ * which the mxc vote cannot bring the rail up. Withdrawn in gdsc_off. */
+static bool
+mmcx_parent(bool on)
+{
+	uint32_t base = rpmh_address("mmcx.lvl");
+	uint32_t level = on ? 0x180 : 0;
+
+	if (base == 0) {
+		printf("camera-s: RPMh has no regulator \"mmcx.lvl\"\n");
+		return false;
+	}
+	if (!rpmh_write(1, &base, &level, false)) {
+		return false;
+	}
+	printf("camera-s: RPMh: mmcx.lvl at level %#x, %s\n", level, on ? "on" : "off");
+	return true;
+}
+
 /* The titan_top GDSC's parent supply (DT cam_cc_titan_top_gdsc: pm_v6d_s3_mmcx_voter_level,
- * an ARC regulator, resource "mxc.lvl", DT init level 0x30): voted like the cx/mx rails
- * (a level, not millivolts), without which the domain does not come on. Withdrawn in gdsc_off. */
+ * an ARC regulator, resource "mxc.lvl", DT init level 0x30 = MIN_SVS): voted like the cx/mx rails
+ * (a level, not millivolts), without which the domain does not come on. Withdrawn in gdsc_off.
+ * Level is SVS (0x80, RPMH_REGULATOR_LEVEL_SVS), one standard functional corner above the
+ * MIN_SVS init: upstream rpmhpd enables no-OPP domains at enable_corner (first above
+ * Retention), so MIN_SVS should suffice, but the FSM never completes on it here; SVS
+ * bisects "corner too low" versus "rail not there at all". Revert to 0x30 if unchanged. */
 static bool
 mxc_parent(bool on)
 {
@@ -688,6 +719,10 @@ gdsc_on(void)
 {
 	uint32_t found = get(&camcc, "titan top GDSC", TITAN_TOP_GDSCR);
 	uint32_t cfg = get(&camcc, "titan top CFG", TITAN_TOP_CFG);
+	/* A camcc-alive reference, read before anything is written: MCLK0's RCG CFG
+	 * (0x15004) is untouched by this run, so a later mismatch means the camcc
+	 * window itself stopped answering rather than the GDSC slice alone. */
+	uint32_t mclk0_cfg = get(&camcc, "MCLK0 RCG cfg", MCLK_CFG(0));
 
 	printf("camera-s: 2: titan top GDSC %#x CFG %#x\n", found, cfg);
 	if (cfg & CFG_UP_COMPLETE) {
@@ -699,11 +734,11 @@ gdsc_on(void)
 		}
 		return true;
 	}
-	/* Experiment: upstream gdsc_init sets RETAIN long before any power-on; do it here first
-	 * and watch whether the FSM goes further (CFG bits) than without it. */
-	(void)put(&camcc, "titan top GDSC retain", TITAN_TOP_GDSCR, found | GDSC_RETAIN_FF, 0);
-	/* The wait values upstream programs at init (the boot loader leaves 2,2,0xf, so this
-	 * is usually a no-op check); without them the state machine never runs right. */
+	/* Upstream gdsc_init programs the waits (the boot loader leaves 2,2,0xf, so this
+	 * is usually a no-op check); without them the state machine never runs right.
+	 * Its mask clears HW_CTRL/SW_OVERRIDE but never RETAIN (bit 11): a RETAIN bit
+	 * left set on an off domain is the normal retention flow (gdsc_disable never
+	 * clears it either; re-enable just clears COLLAPSE), so it is left alone. */
 	{
 		uint32_t mask = GDSC_HW_CTRL | GDSC_SW_OVERRIDE | GDSC_WAIT_MASK;
 		uint32_t want = (found & ~mask) | GDSC_WAIT_VAL;
@@ -715,15 +750,25 @@ gdsc_on(void)
 			found = get(&camcc, "titan top GDSC", TITAN_TOP_GDSCR);
 		}
 	}
-	/* Experiment: upstream gdsc_init sets RETAIN long before any power-on and this driver
-	 * never did - set it first and watch whether the FSM advances further. */
-	(void)put(&camcc, "titan top GDSC retain", TITAN_TOP_GDSCR, found | GDSC_RETAIN_FF, 0);
-	if (!mxc_parent(true)) {
-		give_up("the titan top power domain's parent (mxc)");
+	/* Grandparent first (mmcx.lvl, DT init 0x180), then the parent (mxc.lvl 0x30):
+	 * upstream gdsc_toggle_logic enables the rail(s) before clearing COLLAPSE. */
+	if (!mmcx_parent(true)) {
+		give_up("the titan top power domain's grandparent (mmcx)");
 		return false;
 	}
+	if (!mxc_parent(true)) {
+		give_up("the titan top power domain's parent (mxc)");
+		(void)mmcx_parent(false);
+		return false;
+	}
+	/* Settle: TCS completion only means RPMh took the votes, not that the rails
+	 * finished ramping; upstream covers this with the CFG poll alone, but the
+	 * vote-to-clear gap here is otherwise sub-millisecond of MMIO. Harmless. */
+	delay_for_interval(2, NSEC_PER_MSEC);
 	{
-		/* GPLL0 first (off after a fastboot boot): the AHB tap cannot run until it locks. */
+		/* GPLL0 first (off after a fastboot boot): vote and lock it as before.
+		 * It is not the camera AHB's parent (that CBCR has none), but a
+		 * locked PLL costs nothing while bisecting the GDSC failure. */
 		uint32_t gpll0 = get(&gcc, "gpll0", GCC_GPLL0_ENABLE);
 
 		if (!(gpll0 & GPLL_LOCK_DET) &&
@@ -735,8 +780,12 @@ gdsc_on(void)
 		} else {
 			printf("camera-s: 2: GPLL0 locked\n");
 		}
-		/* The GDSC's own clock next (its DT clocks entry). A hyp-gated clock is a warning,
-		 * not a stop: poll the CFG below to see whether the switch needed it. */
+		/* GCC_CAMERA_AHB_CLK (DT camcc clocks entry, gcc index 5) is a
+		 * critical CBCR in gcc-sm8650 (no branch, no PLL parent: the AHB
+		 * fabric runs off XO, so the GPLL0 vote above is not its parent).
+		 * Upstream qcom_cc_critical_cbcrs_init only sets ENABLE and never
+		 * polls OFF, and the GPU's cfg_ahb answers its block with OFF stuck
+		 * on this phone too: warn and try the GDSC anyway. */
 		uint32_t cbcr = get(&gcc, "camera ahb", GCC_CAM_AHB_CBCR);
 
 		if ((cbcr & CBCR_OFF) &&
@@ -746,17 +795,37 @@ gdsc_on(void)
 			    get(&gcc, "camera ahb", GCC_CAM_AHB_CBCR));
 		}
 	}
+	/* No reset or clock precedes the collapse-clear upstream: cam_cc_titan_top has
+	 * no BCR in camcc-sm8650's resets (BPS/DRV/ICP/IFE/IPE/QDSS/SBI/SFE BCRs belong
+	 * to sub-blocks, deasserted by their drivers after their GDSCs are on) and no
+	 * .resets/.clocks in its gdsc; consumers (camss) power the domain first, then
+	 * deassert. So rails, then straight to COLLAPSE. */
 	if (!put(&camcc, "titan top GDSC", TITAN_TOP_GDSCR, found & ~GDSC_COLLAPSE, GDSC_COLLAPSE)) {
 		(void)mxc_parent(false);
+		(void)mmcx_parent(false);
 		return false;
 	}
 	gdsc_switched = true;
 	/* Upstream polls the CFG register (bit 16), not GDSCR bit 31, for up to 2 ms
 	 * (gdsc.c STATUS_POLL_TIMEOUT_US); poll longer here, a slow start costs nothing. */
 	if (!wait_bits(&camcc, TITAN_TOP_CFG, CFG_UP_COMPLETE, CFG_UP_COMPLETE, 10000)) {
+		uint32_t gpll0_mode, mclk0_now;
+
 		found = get(&camcc, "titan top GDSC", TITAN_TOP_GDSCR);
 		cfg = get(&camcc, "titan top CFG", TITAN_TOP_CFG);
 		printf("camera-s: the titan top power domain does not come on (GDSC %#x CFG %#x)\n", found, cfg);
+		/* Bus-health check, reads only: the COLLAPSE write above read back
+		 * fine, so it landed; if the GDSC slice then hung mid-handshake the
+		 * bridge keeps returning the last good value for both registers
+		 * (GDSCR can never genuinely read back CFG's value: its waits and
+		 * RETAIN bits are SW-owned and nobody rewrote them). A gcc read
+		 * proves our MMIO path; an unchanged MCLK0 CFG proves the camcc
+		 * window is alive and only the GDSC slice is stale (rail/FSM hang),
+		 * while a changed one blames the camcc window itself (iface clock). */
+		gpll0_mode = get(&gcc, "gpll0 mode", GCC_GPLL0_MODE);
+		mclk0_now = get(&camcc, "MCLK0 RCG cfg", MCLK_CFG(0));
+		printf("camera-s: bus health: gpll0 mode %#x, MCLK0 CFG %#x (was %#x)\n",
+		    gpll0_mode, mclk0_now, mclk0_cfg);
 		give_up("a power domain that does not come on");
 		return false;
 	}
@@ -781,6 +850,7 @@ gdsc_off(void)
 	}
 	*(volatile uint32_t *)(camcc.base + TITAN_TOP_GDSCR) |= GDSC_COLLAPSE;
 	(void)mxc_parent(false);
+	(void)mmcx_parent(false);
 	gdsc_switched = false;
 	printf("camera-s: the titan top power domain off\n");
 }

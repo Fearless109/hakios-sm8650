@@ -255,6 +255,47 @@ gcc_wr(uint32_t off, uint32_t v)
 	wr(gcc + off, v);
 }
 
+/* TCSRCC reference (upstream tcsrcc-sm8650.c tcsr_pcie_0_clkref_en:
+ * enable/halt 0x31100 BIT0, branch2 CBCR: only set ENABLE, keep the rest.
+ * pcie1's DT uses sibling #1 (0x31114) for "pcie_clkref_en", so #0 is this
+ * port's own reference, not shared with pcie1. Base 0x1f40000 covers both. */
+#define TCSRCC_BASE             0x01f40000UL
+#define TCSRCC_SIZE             0x40000UL
+#define TCSRCC_PCIE_0_CLKREF    0x31100
+#define TCSRCC_CLKREF_EN        (1u << 0)
+
+static vm_offset_t tcsrcc;
+
+#if 0 /* VERDICT 11-10 (stock 3.0.308, two runs): the first read of
+	 * TCSRCC (0x1f40000 + 0x31100) wedges the bus, the kernel hangs and
+	 * the watchdog reboots the phone ("no answer" x2). The window is
+	 * hyp/XPU-gated for HLOS, same class as the GPU RSCC/FAL/CM3 and the
+	 * modem's 0x408000 IPCC. Kept for reference; do not call. */
+/* Reference clock on: read first, set ENABLE, verify it stuck. False: the
+ * SerDes has nothing to lock to; polling for ready after this is pointless. */
+static bool
+tcsr_clkref_on(void)
+{
+	uint32_t v;
+
+	if (!tcsrcc)
+		tcsrcc = ml_io_map(TCSRCC_BASE, TCSRCC_SIZE);
+	if (!tcsrcc) {
+		printf("pcie: TCSRCC failed to map\n");
+		return false;
+	}
+	v = rd(tcsrcc + TCSRCC_PCIE_0_CLKREF);
+	printf("pcie: TCSRCC clkref as found %#x\n", v);
+	if (!(v & TCSRCC_CLKREF_EN))
+		wr(tcsrcc + TCSRCC_PCIE_0_CLKREF, v | TCSRCC_CLKREF_EN);
+	v = rd(tcsrcc + TCSRCC_PCIE_0_CLKREF);
+	printf("pcie: TCSRCC clkref now %#x%s\n", v,
+	    v & TCSRCC_CLKREF_EN ? ": on" : ": STILL OFF");
+	hakios_tl("tl: pcie tcsr clkref=%#x\n", v);
+	return (v & TCSRCC_CLKREF_EN) != 0;
+}
+#endif /* TCSRCC hyp-gated, see above */
+
 /* Power a port domain: clear the software collapse bit and wait for bit 31,
  * the GPU CX GDSC's way (gdsc.c gdsc_enable). False: not ours, or stays off. */
 static bool
@@ -320,6 +361,14 @@ cesta_load(void)
 						 * down, "active low") */
 #define PHY_SW_RESET            0x200           /* sequence leaves 0: stuck check */
 #define PHY_START_CTRL          0x244           /* sequence leaves 3: stuck check */
+/* SerDes reference (mainline pcie0_phy "rchng", gcc-pineapple.c
+ * gcc_pcie_0_phy_rchng_clk: vote 0x52000 BIT22, halt 0x6b054 is read-only).
+ * The DT sequence assumes it; a bootloader that leaves it off leaves the
+ * SerDes with nothing to lock to. Vote register, not a CBCR: set the bit,
+ * keep the rest (shared register). */
+#define GCC_RCHNG_VOTE          0x52000
+#define GCC_RCHNG_BIT           (1u << 22)
+#define GCC_RCHNG_HALT          0x6b054
 #define PHY_STATUS              0x214           /* dt qcom,phy-status-offset, phy window;
 						 * poll bit6 CLEAR = SerDes ready */
 #define PHY_STATUS_BIT          (1u << 6)       /* set = PHY off (upstream) */
@@ -381,6 +430,19 @@ phy_serdes_ready(void)
 	    rd(phy + PHY_SW_RESET), rd(phy + PHY_POWER_DOWN), rd(phy + PHY_START_CTRL));
 	hakios_tl("tl: pcie serdes sw=%#x pd=%#x start=%#x\n",
 	    rd(phy + PHY_SW_RESET), rd(phy + PHY_POWER_DOWN), rd(phy + PHY_START_CTRL));
+	/* rchng first: the sequence assumes this reference, the poll below
+	 * only passes once it runs. Vote register: read, set, verify. */
+	if (!(gcc_rd(GCC_RCHNG_VOTE) & GCC_RCHNG_BIT))
+		gcc_wr(GCC_RCHNG_VOTE, gcc_rd(GCC_RCHNG_VOTE) | GCC_RCHNG_BIT);
+	printf("pcie: rchng vote %#x halt %#x\n",
+	    gcc_rd(GCC_RCHNG_VOTE), gcc_rd(GCC_RCHNG_HALT));
+	if (!(gcc_rd(GCC_RCHNG_VOTE) & GCC_RCHNG_BIT)) {
+		printf("pcie: rchng vote did not stick: SerDes has no reference\n");
+		return false;
+	}
+	/* reference next: TCSRCC is hyp-gated (first read wedges the bus,
+	 * verdict 11-10) so the SerDes reference can neither be verified nor
+	 * enabled from HLOS; the poll below is expected to fail, cleanly. */
 	for (int i = 0; i < PHY_READY_WAIT_MS / 10; i++) {
 		if (!(rd(phy + PHY_STATUS) & PHY_STATUS_BIT))
 			break;
