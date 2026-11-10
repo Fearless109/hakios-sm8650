@@ -1,0 +1,9 @@
+# what tools/metal-run.sh gives this phone (docs/porting/index.md): its big core and cores, its panel's rate,
+# how many threads copy frames, how often the touch screen is read. A line of boot-arguments; # is a comment.
+# fb_intf=<physical> as well, if its SoC's display interface is known: frames are then written behind the scan.
+# SM8650 (pineapple): 8 cores, big core 7 (Cortex-X4), panel 1440x3200 at 120 Hz LTPO AMOLED.
+# NOTE: hakios-metal's tables are for chip 0x06030500 (Adreno 642L); Adreno 750 is refused by
+# hakios_metal_open() and the window server stays on OpenGL ES (Mesa, which supports A750) -- see
+# devices/shennong/README.md (GPU/Metal). fb_beam needs the MDSS interface registers for SM8650
+# (fb_intf): not yet ported, so frames go on their beat.
+bootcpu=7 cpus=8 cpufreq=1 fb_hz=120 fb_threads=4 touch_poll_us=4000

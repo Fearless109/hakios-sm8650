@@ -1,0 +1,8 @@
+# devices/shennong/drivers/haptic/conf: the vibration motor of the Xiaomi 14 Pro (SM8650).
+# default n: it replaces the common HAPTIC, so it is built only where a defconfig names it.
+
+driver HAPTIC_S
+	file    bsd/dev/hakios.haptic_shennong.c
+	default n
+	help    the vibration motor: PM8550B hv-haptics over the SPMI arbiter (haptic=N). The
+	help    reference phone has an Awinic AW86927 (HAKIOS_HAPTIC) instead

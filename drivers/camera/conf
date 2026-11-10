@@ -1,0 +1,15 @@
+# devices/shennong/drivers/camera/conf: the cameras and flashlight of the Xiaomi 14 Pro (SM8650).
+# default n: both replace the common CAMERA/TORCH drivers, built only where a defconfig names them.
+# Two drivers in one subsystem (like the reference's camera/ + torch in drivers/camera/).
+
+driver CAMERA_S
+	file    bsd/dev/hakios.camera_shennong.c
+	default n
+	help    the cameras (cam=N): the CCI sensors of shennong (qcom,cci0/1/2). The reference phone
+	help    has another sensor set (HAKIOS_CAMERA); tables come from the phone (fw-camera/)
+
+driver TORCH_S
+	file    bsd/dev/hakios.torch_shennong.c
+	default n
+	help    the flashlight (torch=N): the PMIC flash LED of the PM8550B, over the SPMI arbiter.
+	help    The reference phone has a PM8350C flash module (HAKIOS_TORCH) instead

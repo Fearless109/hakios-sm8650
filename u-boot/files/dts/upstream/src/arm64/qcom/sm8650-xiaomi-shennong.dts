@@ -1,0 +1,190 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * The Xiaomi 14 Pro (shennong, SM8650) for HakiOS's U-Boot.
+ *
+ * Only what U-Boot needs: the memory the firmware and the remote processors keep, the panel's framebuffer as the
+ * bootloader left it, the keys, USB as a device (fastboot) and UFS. Every address is the phone's own: the reserved
+ * memory is the Android device tree's (devices/shennong/prebuilt/device-tree.dtb) and Silicium's memory map
+ * (devices/shennong/uefi/files/Platforms/Xiaomi/shennongPkg/Library/MemoryMapLib/MemoryMapLib.c), whichever
+ * reserves more.
+ *
+ * The size of RAM is not here: ABL writes it into the device tree it hands over (the appended Android one), and
+ * U-Boot reads it from there (arch/arm/mach-snapdragon/board.c, qcom_parse_memory()).
+ *
+ * Modelled on the redwood (SM7325) one (devices/redwood/u-boot/.../sm7325-xiaomi-redwood.dts), with SM8650
+ * ("pineapple") values from the phone's own tree (dts/shennong.dts) and UniXNU-shennong's hardware facts.
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/arm/qcom,ids.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/linux-event-codes.h>
+#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
+#include "sm8650.dtsi"
+#include "pmk8550.dtsi"
+#include "pmr735d_a.dtsi"
+#include "pm8550b.dtsi"
+
+/*
+ * The SoC dtsi's carve-outs are overridden by the device tree where they differ (reserved-memory below,
+ * which reserves what the phone's Android reserves).
+ */
+/delete-node/ &rmtfs_mem;
+
+/ {
+	model = "Xiaomi 14 Pro";
+	compatible = "xiaomi,shennong", "qcom,sm8650";
+	chassis-type = "handset";
+
+	/* what ABL matches against; the appended Android device tree carries the same */
+	qcom,msm-id = <0x22d 0x10000>;
+	qcom,board-id = <0 0>;
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/*
+		 * The panel as ABL left it: 1440 x 3200, 32 bits, 120 Hz LTPO. At 0xFC400000 (cont_splash_region)
+		 * the HakiOS loader knows the phone by it (xnuloader/loader.c, efi_main()). No clocks: U-Boot
+		 * keeps the display running by not touching it.
+		 */
+		framebuffer0: framebuffer@fc400000 {
+			compatible = "simple-framebuffer";
+			reg = <0x0 0xfc400000 0x0 (1440 * 3200 * 4)>;
+			width = <1440>;
+			height = <3200>;
+			stride = <(1440 * 4)>;
+			format = "a8r8g8b8";
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		pinctrl-0 = <&kypd_volp_n>;
+		pinctrl-names = "default";
+
+		key-volume-up {
+			label = "Volume Up";
+			gpios = <&pm8550b_gpios 6 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+		};
+	};
+
+	reserved-memory {
+		/* the phone's reserved memory (from the Android tree), where the SoC dtsi has nothing */
+		gunyah_hyp_mem: gunyah-hyp@80000000 {
+			reg = <0x0 0x80000000 0x0 0xe00000>;
+			no-map;
+		};
+
+		hk_cmd_db_mem: cmd-db@81c60000 {
+			reg = <0x0 0x81c60000 0x0 0x20000>;
+			no-map;
+		};
+
+		smem_mem: smem@81d00000 {
+			reg = <0x0 0x81d00000 0x0 0x200000>;
+			no-map;
+		};
+
+		/* Silicium's "PIL Reserved" is the remote processors; the phone's mpss/addsp regions are inside it */
+		mpss_mem: mpss@8bc00000 {
+			reg = <0x0 0x8bc00000 0x0 0xf400000>;
+			no-map;
+		};
+
+		ipa_gsi_mem: ipa-gsi@9b090000 {
+			reg = <0x0 0x9b090000 0x0 0xa000>;
+			no-map;
+		};
+
+		adspslpi_mem: adspslpi@9df00000 {
+			reg = <0x0 0x9df00000 0x0 0x4680000>;
+			no-map;
+		};
+
+		camera_mem: camera@9b300000 {
+			reg = <0x0 0x9b300000 0x0 0x800000>;
+			no-map;
+		};
+
+		video_mem: video@9bb00000 {
+			reg = <0x0 0x9bb00000 0x0 0x800000>;
+			no-map;
+		};
+
+		cvp_mem: cvp@9c300000 {
+			reg = <0x0 0x9c300000 0x0 0x700000>;
+			no-map;
+		};
+
+		usb_ucsi_mem: usb-ucsi@a0000000 {
+			reg = <0x0 0xa0000000 0x0 0x2000>;
+			no-map;
+		};
+
+		hyp_reserved_mem: hyp-reserved@b0000000 {
+			reg = <0x0 0xb0000000 0x0 0x9700000>;
+			no-map;
+		};
+
+		/* the panel's memory and the display's dfps data after it */
+		cont_splash_mem: cont-splash@fc400000 {
+			reg = <0x0 0xfc400000 0x0 0x2b00000>;
+			no-map;
+		};
+
+		/*
+		 * Where the HakiOS loader takes its payload from (PAYLOAD_BASE, 64 MiB with the panic log in its last MiB).
+		 * Mapped (no no-map): the hakios command writes the payload here, and nothing else in U-Boot may take it.
+		 */
+		hakios_payload_mem: hakios-payload@f0000000 {
+			reg = <0x0 0xf0000000 0x0 0x4000000>;
+		};
+	};
+};
+
+&pm8550b_gpios {
+	kypd_volp_n: kypd-volp-n-state {
+		pins = "gpio6";
+		function = PMIC_GPIO_FUNC_NORMAL;
+		power-source = <1>;
+		bias-pull-up;
+		input-enable;
+	};
+};
+
+&pon_pwrkey {
+	status = "okay";
+};
+
+&pon_resin {
+	linux,code = <KEY_VOLUMEDOWN>;
+	status = "okay";
+};
+
+&ufs_mem_hc {
+	status = "okay";
+};
+
+&ufs_mem_phy {
+	status = "okay";
+};
+
+/* USB 2.0 as a device: U-Boot's fastboot; the SuperSpeed PHY is left as ABL left it */
+&usb_1 {
+	qcom,select-utmi-as-pipe-clk;
+	dr_mode = "peripheral";
+	maximum-speed = "high-speed";
+	phys = <&usb_1_hsphy>;
+	phy-names = "usb2-phy";
+	status = "okay";
+};
+
+&usb_1_hsphy {
+	status = "okay";
+};

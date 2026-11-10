@@ -1,0 +1,7 @@
+# devices/shennong/drivers/pcie/conf: PCIe host for the Xiaomi 14 Pro (SM8650) WLAN (WCN7850/kiwi on pcie0).
+
+driver PCIE_S
+	file    bsd/dev/hakios.pcie_shennong.c
+	default n
+	help    the PCIe root complex (pcie0 0x1c00000) that carries the WCN7850 WLAN (pcie=1):
+	help    CNSS power, link training and ECAM reads, step by step; the common kernel has no PCI

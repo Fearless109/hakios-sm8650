@@ -1,0 +1,9 @@
+# devices/shennong/drivers/power/conf: the battery gauge and charger of the Xiaomi 14 Pro (SM8650).
+# default n: built only where a defconfig names it (shennong does).
+
+driver CHG_S
+	file    bsd/dev/hakios.chg_shennong.c
+	default n
+	help    the battery's charge from the PMIC voltage ADC and the charger's basic path
+	help    (fg=1, chg=1) on PM8550/PM8550B over the SPMI arbiter. The reference phone
+	help    reads the battery through the audio DSP or the loader (HAKIOS_BATTERY) instead

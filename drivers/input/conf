@@ -1,0 +1,9 @@
+# devices/shennong/drivers/input/conf: the touch screen of the Xiaomi 14 Pro (SM8650).
+# default n: it replaces the common GOODIX, so it is built only where a defconfig names it.
+
+driver SYNAPTICS
+	file    bsd/dev/hakios.synaptics.c
+	default n
+	help    the touch screen: a Synaptics S3910P over SPI (touchscreen=1). The bus, pins and
+	help    supplies are shennong's (TLMM f000000, QUP1 SE4, GPIOs 48..51/161/162); the Goodix
+	help    driver carries the reference phone's (POCO X5 Pro) instead

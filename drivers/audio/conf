@@ -1,0 +1,11 @@
+# devices/shennong/drivers/audio/conf: the speakers of the Xiaomi 14 Pro (SM8650).
+# Provides the same hakios_speaker_* interface the sound driver calls (HAKIOS_SOUND requires a
+# speaker driver; the checker accepts SPEAKER_S in its place: tools/hakios-config.py).
+# default n: it replaces the common SPEAKER (same interface), so it is built only where a
+# defconfig names it (shennong.config); every other phone would carry it and never use it.
+
+driver SPEAKER_S
+	file    bsd/dev/hakios.speaker_shennong.c
+	default n
+	help    the speakers: WCD939x codec + WSA macros over SoundWire behind the LPASS audio DSP
+	help    (sound=N). The reference phone has two I2C amplifiers (HAKIOS_SPEAKER) instead

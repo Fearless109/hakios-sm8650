@@ -1,0 +1,5 @@
+# HakiOS defconfig for the Xiaomi 14 Pro (shennong): the common kernel, the SM8650 family's facts, and this device's own.
+# Needs the phone's own firmware pulled from your phone (devices/shennong/pull-firmware.sh): `tools/hakios-config.py needs`.
+#include common_defconfig
+#include sm8650.config
+#include shennong.config

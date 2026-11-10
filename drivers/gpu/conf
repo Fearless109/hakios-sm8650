@@ -1,0 +1,14 @@
+# devices/shennong/drivers/gpu/conf: the Adreno 750 of the Xiaomi 14 Pro (SM8650 "pineapple").
+# driver ADRENO750 (same exported symbols as the common ADRENO, which shennong leaves out).
+# default n because of that: with both built in the kernel would not link, and no other phone
+# has this GPU; a defconfig names it only for shennong.
+
+driver ADRENO750
+	file    bsd/dev/hakios.adreno750.c
+	file    iokit/Kernel/hakios.gpu750.cpp iokitcpp
+	default n
+	help    the Adreno 750 (SM8650, gen7) woken step by step (adreno=N), and HakiosGPU, the IOKit service Mesa
+	help    and the window server draw through (gpu=1, adreno_keep=1). Needs the phone's a750_* firmware from
+	help    the phone (fw-gpu/; devices/shennong/pull-firmware.sh). Its GMU/GPUCC/GCC offsets are SM8650's
+	help    (Linux gpucc-sm8650.c, gcc-sm8650.c), where the common driver carries the reference phone's
+	help    (SC7280, Adreno 642L, a660_*); the two share the step logic and register layout of A6xx/A7xx.
